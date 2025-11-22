@@ -4,9 +4,9 @@ compatibility_minimum = 4.1
 reloadable = false
 
 [libraries]
-windows.debug.x86_64 =      "res://addons/audio_bypass/target/debug/audio_bypass_gdext.dll"
-windows.release.x86_64 =    "res://addons/audio_bypass/audio_bypass_gdext.dll"
-macos.debug.arm64 =         "res://addons/audio_bypass/target/debug/libaudio_bypass_gdext.dylib"
-macos.release.arm64 =       "res://addons/audio_bypass/libaudio_bypass_gdext.dylib"
-android.debug.arm64 =       "res://addons/audio_bypass/target/aarch64-linux-android/debug/libaudio_bypass_gdext.so"
-android.release.arm64 =     "res://addons/audio_bypass/libaudio_bypass_gdext.so"
+windows.debug.x86_64 =      "res://addons/audio_bypass/target/debug/audio_bypass.dll"
+windows.release.x86_64 =    "res://addons/audio_bypass/audio_bypass.dll"
+macos.debug.arm64 =         "res://addons/audio_bypass/target/debug/libaudio_bypass.dylib"
+macos.release.arm64 =       "res://addons/audio_bypass/libaudio_bypass.dylib"
+android.debug.arm64 =       "res://addons/audio_bypass/target/aarch64-linux-android/debug/libaudio_bypass.so"
+android.release.arm64 =     "res://addons/audio_bypass/libaudio_bypass.so"
