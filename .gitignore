@@ -14,3 +14,11 @@ export_credentials.cfg
 .mono/
 data_*/
 mono_crash.*.json
+
+
+# Added by cargo
+
+/target
+
+# Not added by cargo
+**.DS_Store

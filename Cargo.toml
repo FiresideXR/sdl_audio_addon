@@ -1,0 +1,8 @@
+[package]
+name = "audio_bypass"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+godot = "0.4.2"
+sdl3 = { version = "0.16.2", features = ["build-from-source"] }
