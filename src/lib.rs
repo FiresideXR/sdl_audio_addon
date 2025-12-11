@@ -2,9 +2,11 @@
 use godot::{classes::{AudioStream, AudioStreamPlayback, Engine, IAudioStream, IAudioStreamPlayback, native::AudioFrame}, obj::Singleton, prelude::*};
 use sdl3::{audio::{AudioFormat, AudioSpec}, sys::audio::SDL_GetAudioStreamData};
 
-mod microphone;
-mod stream;
+mod encoder;
+mod decoder;
 
+use encoder::VoipEncoder;
+use decoder::VoipDecoder;
 
 /// This bypasses Godot's audio system to get their microphone
 /// 
@@ -34,7 +36,8 @@ impl IObject for GdAudioBypass {
 }
 
 
-const VOIP_MIX_RATE: i32 = 44100;
+pub const VOIP_MIX_RATE: i32 = 48000;
+pub const VOIP_FRAME_SIZE: i32 = VOIP_MIX_RATE / 100; // 10ms frame size
 
 
 #[godot_api]
@@ -42,7 +45,7 @@ impl GdAudioBypass {
 
 
     #[func]
-    fn create_default_mic_encoder(&self) -> Gd<microphone::VoipEncoder> {
+    fn create_default_mic_encoder(&self) -> Gd<VoipEncoder> {
 
         let voip_spec = AudioSpec::new(Some(VOIP_MIX_RATE), Some(1), Some(AudioFormat::F32LE));
 
@@ -56,11 +59,14 @@ impl GdAudioBypass {
 
         let encoder = opus::Encoder::new(VOIP_MIX_RATE as u32, opus::Channels::Mono, opus::Application::Voip).expect("Faild to create OPUS Encoder");
 
+        let repacket = opus::Repacketizer::new().expect("Could not create repacketizer");
+
         Gd::from_init_fn(|base|{
-            microphone::VoipEncoder{
+            VoipEncoder{
                 base,
                 encoder,
                 stream,
+                repacket,
             }
         })
     }
@@ -106,15 +112,6 @@ impl GdAudioBypass {
     }
 
 
-
-    /// This is a doc comment
-    #[func]
-    fn test(&mut self) {
-        for id in self.sdl_audio.audio_recording_device_ids().expect("Found no recording devices") {
-            godot_print!("Recording Device: {}", id.name().unwrap())
-        }
-
-    }
 }
 
 
