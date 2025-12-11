@@ -1,11 +1,15 @@
 
-use godot::{classes::{AudioStream, AudioStreamPlayback, Engine, IAudioStream, IAudioStreamPlayback, native::AudioFrame} , prelude::*};
+use godot::{classes::{AudioStream, AudioStreamPlayback, Engine, IAudioStream, IAudioStreamPlayback, native::AudioFrame}, obj::Singleton, prelude::*};
 use sdl3::{audio::{AudioFormat, AudioSpec}, sys::audio::SDL_GetAudioStreamData};
 
-
+mod microphone;
+mod stream;
 
 
 /// This bypasses Godot's audio system to get their microphone
+/// 
+/// This is a Singleton that handles SDL core and is used to create 
+/// an audio stream that mirrors the default microphone
 #[derive(GodotClass)]
 #[class(base=Object)]
 struct GdAudioBypass {
@@ -30,45 +34,76 @@ impl IObject for GdAudioBypass {
 }
 
 
+const VOIP_MIX_RATE: i32 = 44100;
+
+
 #[godot_api]
 impl GdAudioBypass {
 
 
     #[func]
-    fn get_input_devices(&mut self) -> Dictionary {
+    fn create_default_mic_encoder(&self) -> Gd<microphone::VoipEncoder> {
 
-        let mut out = Dictionary::new();
+        let voip_spec = AudioSpec::new(Some(VOIP_MIX_RATE), Some(1), Some(AudioFormat::F32LE));
 
-        for device_id in self.sdl_audio.audio_recording_device_ids().unwrap() {
+        let device = self.sdl_audio.default_recording_device();
 
-            out.set(device_id.name().unwrap_or("NoNameDevice".into()), device_id.id());
-        }
+        // I fucking love letting other people write wrappers for C libraries
 
-        return out
+        let stream = device.open_device_stream(Some(&voip_spec)).expect("Failed to create microphone stream");
+
+        // Me when I don't have to do as much work because beautiful people will lift us all up
+
+        let encoder = opus::Encoder::new(VOIP_MIX_RATE as u32, opus::Channels::Mono, opus::Application::Voip).expect("Faild to create OPUS Encoder");
+
+        Gd::from_init_fn(|base|{
+            microphone::VoipEncoder{
+                base,
+                encoder,
+                stream,
+            }
+        })
+    }
+
+    #[func]
+    fn create_voip_decover_stream(&self) {
+        
     }
 
 
     #[func]
     fn create_default_microphone_audio_stream(&mut self) -> Gd<VoipAudioStream> {
 
+        let mix_rate = godot::classes::AudioServer::singleton().get_mix_rate();
 
+        godot_print!("Mix rate: {mix_rate}");
 
-        let godot_spec = AudioSpec::new(Some(44100), Some(1), Some(AudioFormat::F32LE));
+        let godot_spec = AudioSpec::new(Some(mix_rate as i32), Some(1), Some(AudioFormat::F32LE));
 
-        let stream = self.sdl_audio.default_recording_device().open_device_stream(Some(&godot_spec)).expect("Failed to open default device stream");
+        
+        let device = self.sdl_audio.default_recording_device();
 
-        let godot_stream = Gd::from_init_fn(|base| {
+        godot_print!("{:?}", device.id());
+        
+
+        let stream = device.open_device_stream(Some(&godot_spec)).expect("Failed to open default device stream");
+        
+
+        //let _ = stream.resume();
+
+        //let spec = stream.get_format().expect("bazinga");
+
+        //godot_print!("{spec:?}");
+
+        
+
+        Gd::from_init_fn(|base| {
             VoipAudioStream{
                 base,
                 stream,
             }
-        });
-
-        godot_stream
+        })
     }
-
-
-
 
 
 
@@ -91,6 +126,13 @@ struct VoipAudioStream {
     base: Base<AudioStream>,
 }
 
+#[godot_api]
+impl VoipAudioStream {
+    #[func]
+    pub fn get_stream_size(&mut self) -> i32 {
+        self.stream.available_bytes().expect("Something went wrong getting avilable bytes") / 4
+    }
+}
 
 #[godot_api]
 impl IAudioStream for VoipAudioStream {
@@ -100,6 +142,8 @@ impl IAudioStream for VoipAudioStream {
     }
 
     fn instantiate_playback(&self) -> Option<Gd<AudioStreamPlayback>> {
+
+        // Create the audio playback object that is used to mix the audio with the Godot audio system
         let playback = Gd::from_init_fn(|base| {
             VoipAudioPlayback{
                 base,
@@ -111,16 +155,16 @@ impl IAudioStream for VoipAudioStream {
 
         godot_print!("Playback created");
 
-
-       Some(playback.upcast())
+    
+        Some(playback.upcast())
     }
 
     fn get_length(&self) -> f64 {
-        return 0.0;
+        0.0
     }
 }
 
-const BUFFER_SIZE: usize = 256;
+const BUFFER_SIZE: usize = 1024;
 
 #[derive(GodotClass)]
 #[class(base=AudioStreamPlayback, no_init)]
@@ -154,31 +198,27 @@ impl IAudioStreamPlayback for VoipAudioPlayback {
         0
     }
     
-
+    // This function mixes the data from the microphone stream into the Godot audio system
     unsafe fn mix_rawptr(&mut self, buffer: *mut AudioFrame, _rate_scale: f32, frames: i32) -> i32 {
 
-        for i in 0..frames {
-            unsafe {
-                    *buffer.add(i as usize) = AudioFrame { left: 1.0, right: 0.5 };
-                }
-        }
+        let mut audio_frame_index: usize = 0;
 
-        return frames;
+        let mut remaining_frames = frames;
 
-        let mut audio_frame_index: usize= 0;
+        while remaining_frames > 0 {
 
-        while frames > 0 {
+            let frames_to_get = std::cmp::min(remaining_frames, BUFFER_SIZE as i32);
 
-            let frames_to_get = std::cmp::min(frames, BUFFER_SIZE as i32);
+            remaining_frames -= frames_to_get;
 
-            frames -= frames_to_get;
+            let filled_bytes;
 
             // Fill our internal buffer with audio frames
             unsafe {
-                SDL_GetAudioStreamData(self.master_stream.bind_mut().stream.stream(),self.buffer.as_mut_ptr() as *mut std::ffi::c_void, frames_to_get);
+                filled_bytes = SDL_GetAudioStreamData(self.master_stream.bind_mut().stream.stream(),self.buffer.as_mut_ptr() as *mut std::ffi::c_void, frames_to_get * 4);
             }
 
-            for i in 0..frames_to_get as usize {
+            for i in 0..(filled_bytes / 4) as usize {
                 let frame_data = self.buffer[i];
 
                 let frame = AudioFrame{left: frame_data, right: frame_data};
@@ -191,7 +231,15 @@ impl IAudioStreamPlayback for VoipAudioPlayback {
             }
         }
 
-        return 0;
+        for i in audio_frame_index..(frames as usize) {
+            let frame = AudioFrame{left: 0.0, right: 0.0};
+
+            unsafe {
+                *buffer.add(i) = frame;
+            }
+        }
+
+        frames
     }
 
 
@@ -204,7 +252,7 @@ impl IAudioStreamPlayback for VoipAudioPlayback {
 
 struct SDLExtention;
 
-
+// This code registeres the Singleton and frees the memory once we're done
 #[gdextension]
 unsafe impl ExtensionLibrary for SDLExtention {
     fn on_level_init(level: InitLevel) {
