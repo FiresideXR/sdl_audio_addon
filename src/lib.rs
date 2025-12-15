@@ -23,21 +23,19 @@ struct GdAudioBypass {
 
 #[godot_api]
 impl IObject for GdAudioBypass {
-
-
-
     fn init(base: Base<Object>) -> Self {
         Self{
             sdl_audio: sdl3::init().unwrap().audio().unwrap(),
             base,
         }
     }
-
 }
 
 
 pub const VOIP_MIX_RATE: i32 = 48000;
 pub const VOIP_FRAME_SIZE: i32 = VOIP_MIX_RATE / 100; // 10ms frame size
+
+const VOIP_SPEC: AudioSpec = AudioSpec{freq: Some(VOIP_MIX_RATE), channels: Some(1), format: Some(AudioFormat::F32LE)};
 
 
 #[godot_api]
@@ -47,13 +45,12 @@ impl GdAudioBypass {
     #[func]
     fn create_default_mic_encoder(&self) -> Gd<VoipEncoder> {
 
-        let voip_spec = AudioSpec::new(Some(VOIP_MIX_RATE), Some(1), Some(AudioFormat::F32LE));
-
         let device = self.sdl_audio.default_recording_device();
 
+     
         // I fucking love letting other people write wrappers for C libraries
 
-        let stream = device.open_device_stream(Some(&voip_spec)).expect("Failed to create microphone stream");
+        let stream = device.open_device_stream(Some(&VOIP_SPEC)).expect("Failed to create microphone stream");
 
         // Me when I don't have to do as much work because beautiful people will lift us all up
 
@@ -67,184 +64,37 @@ impl GdAudioBypass {
                 encoder,
                 stream,
                 repacket,
+                paused: true,
             }
         })
     }
 
     #[func]
-    fn create_voip_decover_stream(&self) {
+    fn create_voip_decoder_stream(&self) -> Gd<VoipDecoder> {
         
-    }
-
-
-    #[func]
-    fn create_default_microphone_audio_stream(&mut self) -> Gd<VoipAudioStream> {
-
         let mix_rate = godot::classes::AudioServer::singleton().get_mix_rate();
-
-        godot_print!("Mix rate: {mix_rate}");
 
         let godot_spec = AudioSpec::new(Some(mix_rate as i32), Some(1), Some(AudioFormat::F32LE));
 
-        
-        let device = self.sdl_audio.default_recording_device();
+        let stream = self.sdl_audio.new_stream(Some(&VOIP_SPEC), Some(&godot_spec)).expect("Failed to create voip to godot stream");
 
-        godot_print!("{:?}", device.id());
-        
 
-        let stream = device.open_device_stream(Some(&godot_spec)).expect("Failed to open default device stream");
-        
+        let decoder = opus::Decoder::new(VOIP_MIX_RATE as u32, opus::Channels::Mono).expect("Failed to create Opus decoder");
 
-        //let _ = stream.resume();
-
-        //let spec = stream.get_format().expect("bazinga");
-
-        //godot_print!("{spec:?}");
-
-        
+        let repacket = opus::Repacketizer::new().expect("Failed to create Repacketizer for decoding");
 
         Gd::from_init_fn(|base| {
-            VoipAudioStream{
-                base,
+            VoipDecoder { 
                 stream,
+                base,
+                repacket,
+                decode_buffer: [0.0; VOIP_FRAME_SIZE as usize],
+                repack_buffer: [0; 1276],
+                decoder,
             }
         })
     }
-
-
 }
-
-
-
-#[derive(GodotClass)]
-#[class(base=AudioStream, no_init)]
-struct VoipAudioStream {
-    stream: sdl3::audio::AudioStreamOwner,
-    base: Base<AudioStream>,
-}
-
-#[godot_api]
-impl VoipAudioStream {
-    #[func]
-    pub fn get_stream_size(&mut self) -> i32 {
-        self.stream.available_bytes().expect("Something went wrong getting avilable bytes") / 4
-    }
-}
-
-#[godot_api]
-impl IAudioStream for VoipAudioStream {
-
-    fn get_stream_name(&self) -> GString {
-        "VOIP Audio".into()
-    }
-
-    fn instantiate_playback(&self) -> Option<Gd<AudioStreamPlayback>> {
-
-        // Create the audio playback object that is used to mix the audio with the Godot audio system
-        let playback = Gd::from_init_fn(|base| {
-            VoipAudioPlayback{
-                base,
-                buffer: [0f32; BUFFER_SIZE],
-                master_stream: self.to_gd(),
-                paused: true,
-            }
-        });
-
-        godot_print!("Playback created");
-
-    
-        Some(playback.upcast())
-    }
-
-    fn get_length(&self) -> f64 {
-        0.0
-    }
-}
-
-const BUFFER_SIZE: usize = 1024;
-
-#[derive(GodotClass)]
-#[class(base=AudioStreamPlayback, no_init)]
-struct VoipAudioPlayback {
-    base: Base<AudioStreamPlayback>,
-    master_stream: Gd<VoipAudioStream>,
-    buffer: [f32; BUFFER_SIZE],
-    paused: bool,
-}
-
-
-#[godot_api]
-impl IAudioStreamPlayback for VoipAudioPlayback {
-
-
-    fn start (&mut self, _from: f64) {
-        self.master_stream.bind().stream.resume().expect("I dunno what happened");
-        self.paused = false;
-    }
-
-    fn stop (&mut self) {
-        self.master_stream.bind().stream.pause().expect("Wuh");
-        self.paused = true;
-    }
-
-    fn get_playback_position(&self) -> f64 {
-        0.0
-    }
-
-    fn get_loop_count(&self) -> i32 {
-        0
-    }
-    
-    // This function mixes the data from the microphone stream into the Godot audio system
-    unsafe fn mix_rawptr(&mut self, buffer: *mut AudioFrame, _rate_scale: f32, frames: i32) -> i32 {
-
-        let mut audio_frame_index: usize = 0;
-
-        let mut remaining_frames = frames;
-
-        while remaining_frames > 0 {
-
-            let frames_to_get = std::cmp::min(remaining_frames, BUFFER_SIZE as i32);
-
-            remaining_frames -= frames_to_get;
-
-            let filled_bytes;
-
-            // Fill our internal buffer with audio frames
-            unsafe {
-                filled_bytes = SDL_GetAudioStreamData(self.master_stream.bind_mut().stream.stream(),self.buffer.as_mut_ptr() as *mut std::ffi::c_void, frames_to_get * 4);
-            }
-
-            for i in 0..(filled_bytes / 4) as usize {
-                let frame_data = self.buffer[i];
-
-                let frame = AudioFrame{left: frame_data, right: frame_data};
-
-                unsafe {
-                    *buffer.add(audio_frame_index) = frame;
-                }
-            
-                audio_frame_index += 1
-            }
-        }
-
-        for i in audio_frame_index..(frames as usize) {
-            let frame = AudioFrame{left: 0.0, right: 0.0};
-
-            unsafe {
-                *buffer.add(i) = frame;
-            }
-        }
-
-        frames
-    }
-
-
-    fn is_playing(&self) -> bool {
-        self.paused
-    }
-}
-
 
 
 struct SDLExtention;

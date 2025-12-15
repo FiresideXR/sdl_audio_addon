@@ -1,5 +1,5 @@
 use godot::prelude::*;
-use crate::{VOIP_MIX_RATE, VOIP_FRAME_SIZE};
+use crate::VOIP_FRAME_SIZE;
 
 
 
@@ -14,6 +14,8 @@ pub struct VoipEncoder {
     pub repacket: opus::Repacketizer,
     
     pub base: Base<RefCounted>,
+
+    pub paused: bool,
 }
 
 
@@ -22,14 +24,18 @@ impl VoipEncoder {
 
     /// Starts the microphone stream up and clears the buffer
     #[func]
-    fn resume(&self) {
+    fn resume(&mut self) {
+        if !self.paused {return}
+        self.paused = false;
         self.stream.clear().expect("Could not clear stream");
         self.stream.resume().expect("Could not resume stream");
     }
 
     /// Stops the microphone stream
     #[func]
-    fn pause(&self) {
+    fn pause(&mut self) {
+        if self.paused {return}
+        self.paused = true;
         self.stream.pause().expect("Could not pause stream");
     }
 
@@ -38,8 +44,6 @@ impl VoipEncoder {
     fn get_packet(&mut self) -> PackedByteArray {
 
         let mut frames: Vec<Vec<u8>> = Vec::new();
-
-        //let mut repacket = opus::Repacketizer::new().expect("Could not init Opus repacketizer");
 
         let mut buffer: [f32; VOIP_FRAME_SIZE as usize] = [0.0; VOIP_FRAME_SIZE as usize];
 
@@ -62,18 +66,21 @@ impl VoipEncoder {
             return PackedArray::from(frames.pop().unwrap())
         }
 
-        // Just realized I overcomplicated this :P
-        // 
-        // The repacketizer is designed to combine frames into larger packets
-        // But I'm working with a 10-20ms frame size...
-        //
-        // ...and this code is gonna run 90 times a second (~11ms) so it's unlikely that this will be needed
-
         let mut state = self.repacket.begin();
 
         for frame in frames.iter() {
             // I'd prefer to have this in the while loop but the data doesn't live long enough :(
-            state = state.cat_move(frame).expect("unable to cat frame");
+            // Maybe I just need to finagle the lifetimes though
+
+            //Repacketizer can randomly fail. In this case we just drop the remaining packets.
+            // TODO! This is probably a bad way to handle things. 
+            match state.cat(frame) {
+                Ok(()) => {},
+                Err(_) => {
+                    godot_print!("Repacketizer error: Dropping packets");
+                    break
+                },
+            };
         }
 
         // Today's magic number brought to you by https://www.opus-codec.org/docs/opus_api-1.5/group__opus__repacketizer.html
