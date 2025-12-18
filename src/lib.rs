@@ -45,15 +45,6 @@ impl GdAudioBypass {
     #[func]
     fn create_default_mic_encoder(&self) -> Gd<VoipEncoder> {
 
-        let device = self.sdl_audio.default_recording_device();
-
-     
-        // I fucking love letting other people write wrappers for C libraries
-
-        let stream = device.open_device_stream(Some(&VOIP_SPEC)).expect("Failed to create microphone stream");
-
-        // Me when I don't have to do as much work because beautiful people will lift us all up
-
         let encoder = opus::Encoder::new(VOIP_MIX_RATE as u32, opus::Channels::Mono, opus::Application::Voip).expect("Faild to create OPUS Encoder");
 
         let repacket = opus::Repacketizer::new().expect("Could not create repacketizer");
@@ -62,9 +53,7 @@ impl GdAudioBypass {
             VoipEncoder{
                 base,
                 encoder,
-                stream,
                 repacket,
-                paused: true,
             }
         })
     }

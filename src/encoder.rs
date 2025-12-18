@@ -9,51 +9,40 @@ use crate::VOIP_FRAME_SIZE;
 pub struct VoipEncoder {
     pub encoder: opus::Encoder,
 
-    pub stream: sdl3::audio::AudioStreamOwner,
-
     pub repacket: opus::Repacketizer,
     
     pub base: Base<RefCounted>,
-
-    pub paused: bool,
 }
 
 
 #[godot_api]
 impl VoipEncoder {
 
-    /// Starts the microphone stream up and clears the buffer
-    #[func]
-    fn resume(&mut self) {
-        if !self.paused {return}
-        self.paused = false;
-        self.stream.clear().expect("Could not clear stream");
-        self.stream.resume().expect("Could not resume stream");
-    }
-
-    /// Stops the microphone stream
-    #[func]
-    fn pause(&mut self) {
-        if self.paused {return}
-        self.paused = true;
-        self.stream.pause().expect("Could not pause stream");
-    }
-
     /// Reads off the data from the microphone as an Opus Audio packet
     #[func]
     fn get_packet(&mut self) -> PackedByteArray {
-
         let mut frames: Vec<Vec<u8>> = Vec::new();
 
-        let mut buffer: [f32; VOIP_FRAME_SIZE as usize] = [0.0; VOIP_FRAME_SIZE as usize];
+        //let mut buffer: [f32; VOIP_FRAME_SIZE as usize] = [0.0; VOIP_FRAME_SIZE as usize];
+
+        //godot_print!("frames available: {}", godot::classes::AudioServer::singleton().get_input_frames_available());
 
         // Collect frames from the microphone
-        while (self.stream.available_bytes().expect("D: Couldn't get available bytes") / 4 > VOIP_FRAME_SIZE) && (frames.len() <= 10) { // 80 character rule dying a slow and painful death
+        while (godot::classes::AudioServer::singleton().get_input_frames_available() >= VOIP_FRAME_SIZE) && (frames.len() <= 10) { // 80 character rule dying a slow and painful death
 
-            self.stream.read_f32_samples(&mut buffer).expect("Could not read samples into buffer");
+            let frame_buffer = godot::classes::AudioServer::singleton().get_input_frames(VOIP_FRAME_SIZE);
+
+
+
+            let f: Vec<f32> = frame_buffer.as_slice().iter().map(|e| (e.x + e.y) / 2.0).collect();
+
+            //godot_print!("{:?}", f);
+
+
+            //self.stream.read_f32_samples(&mut buffer).expect("Could not read samples into buffer");
             
 
-            let new_frame = self.encoder.encode_vec_float(&buffer, 1024).expect("Something went terribly wrong");
+            let new_frame = self.encoder.encode_vec_float(&f, 1024).expect("Something went terribly wrong");
 
             frames.push(new_frame);
         }
